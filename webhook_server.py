@@ -11,7 +11,7 @@ Supports integrations with:
 - Custom landing pages
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from functools import wraps
 import json
 import hmac
@@ -21,8 +21,18 @@ from datetime import datetime
 
 from agent import LeadGenerationAgent
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.')
 agent = LeadGenerationAgent()
+
+
+# Serve static files (popup-form.js, etc.)
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    response = send_from_directory('.', filename)
+    # Allow CORS for embedding on any website
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
 
 # Configuration
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "your-webhook-secret")
@@ -58,13 +68,20 @@ def health_check():
     })
 
 
-@app.route("/webhook/lead", methods=["POST"])
-@verify_signature
+@app.route("/webhook/lead", methods=["POST", "OPTIONS"])
 def receive_lead():
     """
     Main webhook endpoint for receiving leads.
     Accepts JSON payload with lead data.
     """
+    # Handle CORS preflight
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response, 200
+
     try:
         data = request.json
 
@@ -74,19 +91,23 @@ def receive_lead():
         # Process through agent
         lead = agent.process_landing_page_lead(form_data)
 
-        return jsonify({
+        response = jsonify({
             "success": True,
             "lead_id": lead.id,
             "score": lead.score,
             "message": f"Lead {lead.email} processed successfully"
-        }), 200
+        })
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response, 200
 
     except Exception as e:
         print(f"[WEBHOOK ERROR] {str(e)}")
-        return jsonify({
+        response = jsonify({
             "success": False,
             "error": str(e)
-        }), 500
+        })
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response, 500
 
 
 @app.route("/webhook/webflow", methods=["POST"])
