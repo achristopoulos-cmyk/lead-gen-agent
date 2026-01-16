@@ -1,0 +1,23 @@
+# Lead Generation Agent Dependencies
+
+# Web framework for webhook handling
+flask>=2.3.0
+
+# HTTP requests for Attio API
+requests>=2.31.0
+
+# Scheduling for automated outreach
+schedule>=1.2.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Optional: For production deployment
+gunicorn>=21.0.0
+
+# Optional: For async operations
+aiohttp>=3.8.0
+
+# Optional: For email sending
+# sendgrid>=6.10.0  # If using SendGrid
+# resend>=0.6.0     # If using Resend

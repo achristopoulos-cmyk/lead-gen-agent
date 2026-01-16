@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: lead-gen-agent
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn webhook_server:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: ATTIO_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.12.0

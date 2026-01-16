@@ -1,0 +1,23 @@
+{
+  "attio_api_key": "",
+  "attio_enabled": true,
+
+  "resend_api_key": "",
+  "resend_enabled": true,
+  "resend_from_email": "hello@yourdomain.com",
+  "resend_from_name": "Your Name",
+
+  "webhook_secret": "",
+  "leads_db_path": "leads_database.json",
+
+  "services": {
+    "linkedin_presence": {
+      "name": "Build a LinkedIn Presence that feels like you - Join the Zag",
+      "description": "Weekly actionable tools to build authentic LinkedIn presence"
+    },
+    "customer_voice_research": {
+      "name": "Customer Voice Research and Market Validation",
+      "description": "Deep customer interviews for product/market validation"
+    }
+  }
+}
