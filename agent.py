@@ -239,21 +239,40 @@ class LeadGenerationAgent:
         - Send scheduled emails/messages
         - Follow up on engaged leads
         - Update lead statuses
+        - Skip leads who have replied, bounced, or complained
         """
         print(f"\n[AGENT] Running daily outreach - {datetime.now().strftime('%Y-%m-%d')}")
 
         today = datetime.now().date()
         outreach_count = 0
+        skipped_count = 0
 
         for lead_id, lead_data in self.leads.items():
+            # Skip leads marked as do_not_contact
+            if lead_data.get('do_not_contact'):
+                print(f"[AGENT] Skipping {lead_data['email']} - marked do_not_contact")
+                skipped_count += 1
+                continue
+
+            # Skip leads who have already engaged (replied)
+            if lead_data.get('sequence_stopped_reason') == 'replied':
+                print(f"[AGENT] Skipping {lead_data['email']} - already replied")
+                skipped_count += 1
+                continue
+
+            # Skip leads with bounced/complained status
+            if lead_data.get('sequence_stopped_reason') in ['bounced', 'spam_complaint']:
+                skipped_count += 1
+                continue
+
             if lead_data.get('next_action_date'):
                 action_date = datetime.fromisoformat(lead_data['next_action_date']).date()
 
-                if action_date <= today and lead_data['status'] not in ['won', 'lost']:
+                if action_date <= today and lead_data['status'] not in ['won', 'lost', 'engaged']:
                     self._execute_outreach_step(lead_id, lead_data)
                     outreach_count += 1
 
-        print(f"[AGENT] Completed {outreach_count} outreach actions")
+        print(f"[AGENT] Completed {outreach_count} outreach actions (skipped {skipped_count} engaged/invalid leads)")
         return outreach_count
 
     def _execute_outreach_step(self, lead_id: str, lead_data: dict):
@@ -364,6 +383,172 @@ class LeadGenerationAgent:
         """Add a lead manually (from LinkedIn prospecting, etc.)"""
         lead_data['source'] = lead_data.get('source', 'manual_entry')
         return self.process_landing_page_lead(lead_data)
+
+    # ===========================================
+    # EMAIL EVENT HANDLERS
+    # ===========================================
+
+    def handle_email_opened(self, lead_id: str, lead_data: dict):
+        """Handle when a lead opens an email - shows interest."""
+        print(f"[AGENT] Email opened by {lead_data['email']}")
+
+        # Log the event
+        self.leads[lead_id]['notes'].append({
+            "timestamp": datetime.now().isoformat(),
+            "action": "email_opened",
+            "details": "Lead opened outreach email"
+        })
+
+        # Increase engagement score slightly
+        current_score = self.leads[lead_id].get('score', 0)
+        self.leads[lead_id]['score'] = min(100, current_score + 5)
+
+        self._save_leads()
+
+    def handle_email_clicked(self, lead_id: str, lead_data: dict):
+        """Handle when a lead clicks a link - strong interest signal."""
+        print(f"[AGENT] Email link clicked by {lead_data['email']}")
+
+        # Log the event
+        self.leads[lead_id]['notes'].append({
+            "timestamp": datetime.now().isoformat(),
+            "action": "email_clicked",
+            "details": "Lead clicked link in email"
+        })
+
+        # Increase engagement score more significantly
+        current_score = self.leads[lead_id].get('score', 0)
+        self.leads[lead_id]['score'] = min(100, current_score + 10)
+
+        # Update status to engaged if not already further along
+        if self.leads[lead_id]['status'] in ['new', 'contacted']:
+            self.leads[lead_id]['status'] = 'engaged'
+            print(f"[AGENT] Lead {lead_data['email']} marked as ENGAGED (clicked link)")
+
+        self._save_leads()
+
+        # Send notification if hot lead
+        if self.leads[lead_id]['score'] >= self.config.get('scoring_thresholds', {}).get('hot', 80):
+            self._send_hot_lead_notification(lead_id, self.leads[lead_id], "clicked a link")
+
+    def handle_email_reply(self, lead_id: str, lead_data: dict, subject: str = "", body: str = ""):
+        """
+        Handle when a lead replies to an email - highest engagement signal.
+        This STOPS the outreach sequence and marks them as engaged.
+        """
+        print(f"[AGENT] *** EMAIL REPLY from {lead_data['email']} ***")
+
+        # Log the reply
+        self.leads[lead_id]['notes'].append({
+            "timestamp": datetime.now().isoformat(),
+            "action": "email_reply",
+            "subject": subject,
+            "body_preview": body[:200] if body else "",
+            "details": "Lead replied to outreach email"
+        })
+
+        # Significantly boost score
+        current_score = self.leads[lead_id].get('score', 0)
+        self.leads[lead_id]['score'] = min(100, current_score + 25)
+
+        # Mark as engaged and STOP the sequence
+        self.leads[lead_id]['status'] = 'engaged'
+        self.leads[lead_id]['next_action'] = None  # Stop the sequence
+        self.leads[lead_id]['next_action_date'] = None
+        self.leads[lead_id]['sequence_stopped_reason'] = 'replied'
+
+        self._save_leads()
+
+        # Update Attio status
+        if self.config.get("attio_enabled", False) and lead_data.get('attio_id'):
+            self.attio.update_person_status(lead_data['attio_id'], 'engaged')
+
+        # Always send notification for replies
+        self._send_hot_lead_notification(lead_id, self.leads[lead_id], "replied to your email")
+
+        print(f"[AGENT] Sequence STOPPED for {lead_data['email']} - awaiting manual follow-up")
+
+    def handle_email_bounced(self, lead_id: str, lead_data: dict):
+        """Handle bounced emails - stop sequence and mark as invalid."""
+        print(f"[AGENT] Email bounced for {lead_data['email']}")
+
+        # Log the event
+        self.leads[lead_id]['notes'].append({
+            "timestamp": datetime.now().isoformat(),
+            "action": "email_bounced",
+            "details": "Email address bounced"
+        })
+
+        # Stop the sequence
+        self.leads[lead_id]['status'] = 'lost'
+        self.leads[lead_id]['next_action'] = None
+        self.leads[lead_id]['next_action_date'] = None
+        self.leads[lead_id]['sequence_stopped_reason'] = 'bounced'
+
+        self._save_leads()
+
+    def handle_email_complained(self, lead_id: str, lead_data: dict):
+        """Handle spam complaints - immediately stop all contact."""
+        print(f"[AGENT] ⚠️ SPAM COMPLAINT from {lead_data['email']}")
+
+        # Log the event
+        self.leads[lead_id]['notes'].append({
+            "timestamp": datetime.now().isoformat(),
+            "action": "spam_complaint",
+            "details": "Lead marked email as spam - DO NOT CONTACT"
+        })
+
+        # Stop all contact
+        self.leads[lead_id]['status'] = 'lost'
+        self.leads[lead_id]['next_action'] = None
+        self.leads[lead_id]['next_action_date'] = None
+        self.leads[lead_id]['sequence_stopped_reason'] = 'spam_complaint'
+        self.leads[lead_id]['do_not_contact'] = True
+
+        self._save_leads()
+
+    def _send_hot_lead_notification(self, lead_id: str, lead_data: dict, action: str):
+        """Send notification when a hot lead engages."""
+        notification_email = self.config.get('notifications', {}).get('email_alerts', '')
+
+        if not notification_email:
+            notification_email = self.config.get('resend_from_email', '')
+
+        if not notification_email or not self.config.get('resend_enabled', False):
+            print(f"[AGENT] Hot lead notification (no email configured): {lead_data['email']} {action}")
+            return
+
+        subject = f"🔥 Hot Lead Alert: {lead_data.get('first_name', 'Someone')} {lead_data.get('last_name', '')} {action}"
+
+        body = f"""Hot lead engagement alert!
+
+Lead: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}
+Email: {lead_data.get('email', '')}
+Company: {lead_data.get('company', '')}
+Title: {lead_data.get('title', '')}
+Score: {lead_data.get('score', 0)}
+
+Action: {action}
+
+Status: {lead_data.get('status', '')}
+Service Interest: {lead_data.get('interested_service', '')}
+
+---
+This lead needs your attention! The automated sequence has been paused.
+
+View in Attio: https://app.attio.com/rocksalt-consulting-ltd/person/{lead_data.get('attio_id', '')}
+"""
+
+        result = self.resend.send_email(
+            to=notification_email,
+            subject=subject,
+            text_body=body
+        )
+
+        if result.success:
+            print(f"[AGENT] Hot lead notification sent to {notification_email}")
+        else:
+            print(f"[AGENT] Failed to send notification: {result.error}")
 
 
 # CLI interface for testing

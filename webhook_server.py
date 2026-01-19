@@ -383,17 +383,180 @@ def preview_outreach(lead_id):
     return jsonify(message)
 
 
+# ===========================================
+# RESEND EMAIL EVENT WEBHOOKS
+# ===========================================
+
+def verify_resend_signature(payload: bytes, signature_header: str, timestamp: str) -> bool:
+    """Verify Resend webhook signature using HMAC-SHA256."""
+    secret = agent.config.get("resend_webhook_secret", "")
+    if not secret:
+        return True  # Skip verification if no secret configured
+
+    try:
+        # Resend uses svix for webhooks - signature format: v1,signature
+        signatures = signature_header.split(" ")
+        for sig in signatures:
+            if sig.startswith("v1,"):
+                expected_sig = sig[3:]
+                # Create signed payload: timestamp.payload
+                signed_payload = f"{timestamp}.{payload.decode('utf-8')}"
+                computed = hmac.new(
+                    secret.encode(),
+                    msg=signed_payload.encode(),
+                    digestmod=hashlib.sha256
+                ).hexdigest()
+                if hmac.compare_digest(computed, expected_sig):
+                    return True
+        return False
+    except Exception as e:
+        print(f"[RESEND WEBHOOK] Signature verification error: {e}")
+        return False
+
+
+@app.route("/webhook/resend", methods=["POST"])
+def resend_webhook():
+    """
+    Handle Resend email events (delivered, opened, clicked, bounced, complained).
+
+    Set up in Resend Dashboard > Webhooks:
+    URL: https://your-domain.com/webhook/resend
+    Events: email.delivered, email.opened, email.clicked, email.bounced, email.complained
+    """
+    try:
+        # Verify webhook signature
+        signature = request.headers.get("svix-signature", "")
+        timestamp = request.headers.get("svix-timestamp", "")
+
+        if agent.config.get("resend_webhook_secret"):
+            if not verify_resend_signature(request.data, signature, timestamp):
+                print("[RESEND WEBHOOK] Invalid signature - rejecting request")
+                return jsonify({"error": "Invalid signature"}), 401
+
+        data = request.json
+        event_type = data.get("type", "")
+        event_data = data.get("data", {})
+
+        # Extract email details
+        email_id = event_data.get("email_id")
+        to_email = event_data.get("to", [""])[0] if isinstance(event_data.get("to"), list) else event_data.get("to", "")
+
+        print(f"[RESEND WEBHOOK] Event: {event_type} | Email: {to_email}")
+
+        # Find the lead by email
+        lead_id = None
+        lead_data = None
+        for lid, ldata in agent.leads.items():
+            if ldata.get("email") == to_email:
+                lead_id = lid
+                lead_data = ldata
+                break
+
+        if not lead_data:
+            print(f"[RESEND WEBHOOK] Lead not found for email: {to_email}")
+            return jsonify({"status": "ok", "message": "Lead not found"}), 200
+
+        # Handle different event types
+        if event_type == "email.opened":
+            agent.handle_email_opened(lead_id, lead_data)
+
+        elif event_type == "email.clicked":
+            agent.handle_email_clicked(lead_id, lead_data)
+
+        elif event_type == "email.bounced":
+            agent.handle_email_bounced(lead_id, lead_data)
+
+        elif event_type == "email.complained":
+            agent.handle_email_complained(lead_id, lead_data)
+
+        elif event_type == "email.delivered":
+            # Just log delivery, no action needed
+            print(f"[RESEND WEBHOOK] Email delivered to {to_email}")
+
+        return jsonify({"status": "ok", "event": event_type}), 200
+
+    except Exception as e:
+        print(f"[RESEND WEBHOOK ERROR] {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/webhook/reply", methods=["POST"])
+def email_reply_webhook():
+    """
+    Handle email replies (via email forwarding or Resend inbound).
+
+    This endpoint receives forwarded replies to process engagement.
+    You can set up email forwarding rules to send replies here.
+    """
+    try:
+        data = request.json
+
+        # Extract reply details
+        from_email = data.get("from", data.get("sender", ""))
+        subject = data.get("subject", "")
+        body = data.get("body", data.get("text", ""))
+
+        print(f"[REPLY WEBHOOK] From: {from_email} | Subject: {subject}")
+
+        # Find the lead by email
+        lead_id = None
+        lead_data = None
+        for lid, ldata in agent.leads.items():
+            if ldata.get("email") == from_email:
+                lead_id = lid
+                lead_data = ldata
+                break
+
+        if not lead_data:
+            print(f"[REPLY WEBHOOK] Lead not found for email: {from_email}")
+            return jsonify({"status": "ok", "message": "Lead not found"}), 200
+
+        # Handle the reply - this is the most important engagement signal
+        agent.handle_email_reply(lead_id, lead_data, subject, body)
+
+        return jsonify({"status": "ok", "lead_id": lead_id}), 200
+
+    except Exception as e:
+        print(f"[REPLY WEBHOOK ERROR] {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/leads/<lead_id>/mark-engaged", methods=["POST"])
+def mark_lead_engaged(lead_id):
+    """Manually mark a lead as engaged (e.g., when they reply outside the system)."""
+    try:
+        lead_data = agent.leads.get(lead_id)
+        if not lead_data:
+            return jsonify({"error": "Lead not found"}), 404
+
+        agent.handle_email_reply(lead_id, lead_data, "Manual engagement", "Marked engaged manually")
+
+        return jsonify({
+            "success": True,
+            "lead_id": lead_id,
+            "status": agent.leads[lead_id].get("status")
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     print("\n=== Lead Generation Agent - Webhook Server ===")
-    print("\nEndpoints:")
+    print("\nLead Capture Endpoints:")
     print("  POST /webhook/lead     - Generic lead submission")
     print("  POST /webhook/webflow  - Webflow form integration")
     print("  POST /webhook/typeform - Typeform integration")
     print("  POST /webhook/tally    - Tally form integration")
     print("  POST /webhook/generic  - Any JSON format")
-    print("\n  GET  /api/leads        - List all leads")
+    print("\nEmail Event Endpoints:")
+    print("  POST /webhook/resend   - Resend email events (opens, clicks, bounces)")
+    print("  POST /webhook/reply    - Email reply notifications")
+    print("\nAPI Endpoints:")
+    print("  GET  /api/leads        - List all leads")
     print("  GET  /api/pipeline     - Pipeline summary")
     print("  POST /api/outreach/run - Trigger outreach")
+    print("  POST /api/leads/<id>/mark-engaged - Mark lead as engaged")
     print("\nStarting server on http://localhost:5000")
 
     app.run(host="0.0.0.0", port=5000, debug=True)

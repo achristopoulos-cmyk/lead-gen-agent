@@ -457,10 +457,17 @@ Worth a conversation to explore?
         if not outreach_step:
             outreach_step = sequence.steps[0]
 
+        # Choose website link based on service
+        if service == ServiceType.LINKEDIN_PRESENCE:
+            website_link = "www.rocksalt-consulting.com"
+        else:  # CUSTOMER_VOICE_RESEARCH
+            website_link = "www.rocksalt-consulting.com/landing"
+
         # Personalize the message
-        signature = """Best,
+        signature = f"""Best,
 Andreas Christopoulos
 CEO & Co-Founder
+{website_link}
 
 P.S. Reply to this email anytime - I read and respond to every message."""
 
