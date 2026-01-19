@@ -190,24 +190,27 @@ class AttioClient:
         print(f"[ATTIO] Linked person {person_id} to company {company_id}")
 
     def add_to_lead_list(self, record_id: str, lead):
-        """Add the person to a leads list/collection with custom attributes."""
+        """Add the person to the Lead Gen Outbound list in Attio."""
         if not self.api_key:
             return
 
-        # Create or update a list entry with lead-specific data
-        # This can be customized based on your Attio lists setup
-        list_data = {
-            "record_id": record_id,
-            "attributes": {
-                "lead_source": lead.source,
-                "lead_score": lead.score,
-                "interested_service": lead.interested_service.value,
-                "audience_type": lead.audience_type.value,
-                "status": lead.status.value
+        # Lead Gen Outbound list ID
+        list_id = "70e74b30-0634-499a-ac98-922cac4c4789"
+
+        entry_data = {
+            "data": {
+                "parent_object": "people",
+                "parent_record_id": record_id,
+                "entry_values": {}
             }
         }
 
-        print(f"[ATTIO] Added to lead list with score: {lead.score}")
+        response = self._make_request("POST", f"lists/{list_id}/entries", entry_data)
+
+        if response and not response.get("error"):
+            print(f"[ATTIO] Added to Lead Gen Outbound list (Score: {lead.score})")
+        else:
+            print(f"[ATTIO] Note: Could not add to list (may already exist)")
 
     def update_person_status(self, record_id: str, status: str):
         """Update the lead status for a person."""
