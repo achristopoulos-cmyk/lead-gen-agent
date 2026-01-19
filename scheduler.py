@@ -1,14 +1,20 @@
 """
 Scheduler for Automated Lead Generation Tasks
 Runs daily outreach and maintenance tasks.
+
+Usage:
+  python scheduler.py              # Run scheduler in foreground
+  python scheduler.py --run-now    # Run outreach immediately and exit
 """
 
 import schedule
 import time
+import sys
 from datetime import datetime
 import json
 
 from agent import LeadGenerationAgent
+from resend_integration import ResendClient
 
 
 def load_config():
@@ -25,6 +31,7 @@ def run_daily_outreach():
     agent = LeadGenerationAgent()
     count = agent.run_daily_outreach()
     print(f"[SCHEDULER] Completed {count} outreach actions")
+    return count
 
 
 def generate_daily_report():
@@ -50,6 +57,76 @@ def generate_daily_report():
         print(f"  - {lead['name']} ({lead['company']}) - Score: {lead['score']}")
 
     print("=" * 50)
+
+    # Send email summary if enabled
+    config = load_config()
+    if config.get('notifications', {}).get('daily_summary', False):
+        send_daily_email_summary(agent, summary)
+
+
+def send_daily_email_summary(agent, summary):
+    """Send daily pipeline summary via email."""
+    config = load_config()
+    notification_email = config.get('notifications', {}).get('email_alerts', '')
+
+    if not notification_email or not config.get('resend_enabled', False):
+        return
+
+    resend = ResendClient(
+        api_key=config.get('resend_api_key'),
+        from_email=config.get('resend_from_email'),
+        from_name=config.get('resend_from_name')
+    )
+
+    # Build email body
+    subject = f"📊 Daily Lead Report - {datetime.now().strftime('%Y-%m-%d')}"
+
+    # Count engaged leads
+    engaged_count = summary['by_status'].get('engaged', 0)
+    contacted_count = summary['by_status'].get('contacted', 0)
+    new_count = summary['by_status'].get('new', 0)
+
+    hot_leads_text = ""
+    if summary['high_priority']:
+        hot_leads_text = "\n🔥 HOT LEADS (Score 70+):\n"
+        for lead in summary['high_priority'][:5]:
+            hot_leads_text += f"  • {lead['name']} @ {lead['company']} (Score: {lead['score']})\n"
+
+    body = f"""Daily Lead Generation Report
+
+📈 PIPELINE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Leads: {summary['total_leads']}
+
+By Status:
+  • New: {new_count}
+  • Contacted: {contacted_count}
+  • Engaged: {engaged_count}
+
+By Service:
+  • LinkedIn Presence: {summary['by_service'].get('linkedin_presence', 0)}
+  • Market Validation: {summary['by_service'].get('customer_voice_research', 0)}
+{hot_leads_text}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+View full pipeline in Attio:
+https://app.attio.com/rocksalt-consulting-ltd
+
+--
+Lead Generation Agent
+Rocksalt Consulting
+"""
+
+    result = resend.send_email(
+        to=notification_email,
+        subject=subject,
+        text_body=body
+    )
+
+    if result.success:
+        print(f"[SCHEDULER] Daily summary email sent to {notification_email}")
+    else:
+        print(f"[SCHEDULER] Failed to send summary: {result.error}")
 
 
 def cleanup_stale_leads():
@@ -103,6 +180,26 @@ def setup_schedule():
 
 
 def main():
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--run-now":
+            print("\n=== Running Outreach Now ===")
+            count = run_daily_outreach()
+            generate_daily_report()
+            print(f"\nCompleted! {count} outreach actions executed.")
+            return
+        elif sys.argv[1] == "--report":
+            generate_daily_report()
+            return
+        elif sys.argv[1] == "--help":
+            print(__doc__)
+            print("\nOptions:")
+            print("  --run-now    Run outreach immediately and exit")
+            print("  --report     Generate report only")
+            print("  --help       Show this help message")
+            print("\nNo arguments: Start scheduler daemon")
+            return
+
     setup_schedule()
 
     while True:
