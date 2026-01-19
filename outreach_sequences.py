@@ -459,8 +459,8 @@ Worth a conversation to explore?
 
         # Personalize the message
         signature = """Best,
-[Your Name]
-[Your Title]
+Andreas Christopoulos
+CEO & Co-Founder
 
 P.S. Reply to this email anytime - I read and respond to every message."""
 

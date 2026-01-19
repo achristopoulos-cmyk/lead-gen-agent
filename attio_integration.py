@@ -84,9 +84,7 @@ class AttioClient:
         # Use Attio's query endpoint to find by email
         query_data = {
             "filter": {
-                "email_addresses": {
-                    "contains": email
-                }
+                "email_addresses": email
             }
         }
 
@@ -161,9 +159,7 @@ class AttioClient:
         # Try to find existing company
         query_data = {
             "filter": {
-                "name": {
-                    "contains": company_name
-                }
+                "name": company_name
             }
         }
 

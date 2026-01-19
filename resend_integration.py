@@ -102,6 +102,12 @@ class ResendClient:
             print(f"[RESEND] Exception: {str(e)}")
             return EmailResult(success=False, error=str(e))
 
+    def _sanitize_tag_value(self, value: str) -> str:
+        """Sanitize tag values to only contain ASCII letters, numbers, underscores, or dashes."""
+        import re
+        # Replace any character that isn't alphanumeric, underscore, or dash with underscore
+        return re.sub(r'[^a-zA-Z0-9_-]', '_', value)
+
     def send_outreach_email(
         self,
         to: str,
@@ -123,12 +129,12 @@ class ResendClient:
         # Convert plain text to simple HTML with proper formatting
         html_body = self._text_to_html(body)
 
-        # Build tracking tags
+        # Build tracking tags (sanitize values for Resend API compatibility)
         tags = []
         if lead_id:
-            tags.append({"name": "lead_id", "value": lead_id})
+            tags.append({"name": "lead_id", "value": self._sanitize_tag_value(lead_id)})
         if sequence_step:
-            tags.append({"name": "sequence_step", "value": sequence_step})
+            tags.append({"name": "sequence_step", "value": self._sanitize_tag_value(sequence_step)})
         tags.append({"name": "campaign", "value": "lead_gen_outreach"})
 
         return self.send_email(
